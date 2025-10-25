@@ -2,11 +2,13 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Car Racing — Score & Speed</title>
+  <title>Car Racing — Blue Car & Red Obstacles (Mobile Touch)</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
   <style>
-    :root {
-      --game-w: 400px;
-      --game-h: 600px;
+    :root { --game-w: 400px; --game-h: 600px; }
+    /* make the game responsive on smaller screens */
+    @media (max-width:420px){
+      :root { --game-w: 360px; --game-h: 540px; }
     }
     body {
       margin: 0;
@@ -17,11 +19,11 @@
       background: linear-gradient(#111, #333);
       font-family: Arial, sans-serif;
       color: #fff;
+      -webkit-user-select: none;
+      -ms-user-select: none;
+      user-select: none;
     }
-    #gameWrapper {
-      width: var(--game-w);
-      text-align: center;
-    }
+    #gameWrapper { width: var(--game-w); text-align: center; touch-action: none; }
     #gameArea {
       width: var(--game-w);
       height: var(--game-h);
@@ -31,29 +33,34 @@
       border-left: 4px dashed rgba(255,255,255,0.12);
       border-right: 4px dashed rgba(255,255,255,0.12);
       overflow: hidden;
+      touch-action: none; /* allow pointer events to work without browser gestures */
     }
-    #hud {
-      position: absolute;
-      top: 8px;
-      left: 8px;
-      z-index: 30;
-      font-weight: bold;
-      text-shadow: 0 1px 2px rgba(0,0,0,0.8);
-    }
+    #hud { position: absolute; top: 8px; left: 8px; z-index: 30; font-weight: bold; text-shadow: 0 1px 2px rgba(0,0,0,0.8); }
     #hud .score { display:block; font-size:18px; }
     #hud .speed { display:block; font-size:13px; opacity:0.9; margin-top:4px;}
-    #controls {
-      margin-top: 12px;
-    }
+    #controls { margin-top: 12px; }
 
+    /* Car is now an inline SVG element styled via CSS */
     #car {
       width: 50px;
+      height: 70px;
       position: absolute;
       left: 175px;
       bottom: 20px;
       z-index: 20;
-      transition: left 0s; /* movement via script */
-      user-select: none;
+      transform-origin: center;
+      pointer-events: none; /* don't block pointer events on the gameArea */
+    }
+
+    /* Obstacles (other cars) */
+    .obstacle {
+      position: absolute;
+      width: 60px;
+      height: 40px;
+      background: #e74c3c; /* red obstacles */
+      border-radius: 6px;
+      z-index: 15;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.5);
     }
 
     /* Start overlay */
@@ -67,6 +74,8 @@
       z-index: 40;
       flex-direction: column;
       gap: 12px;
+      padding: 10px;
+      box-sizing: border-box;
     }
     #overlay h1 { margin: 0; font-size: 24px; }
     .btn {
@@ -78,33 +87,37 @@
       cursor: pointer;
       font-weight: bold;
       box-shadow: 0 6px 18px rgba(0,0,0,0.5);
+      -webkit-touch-callout: none;
     }
     .btn:active { transform: translateY(1px); }
     #restartBtn { background:#2ecc71; }
-
-    /* small help text at bottom of game area */
-    #help {
-      position: absolute;
-      bottom: 6px;
-      left: 50%;
-      transform: translateX(-50%);
-      z-index: 25;
-      font-size: 12px;
-      opacity: 0.9;
-    }
+    #help { position: absolute; bottom: 6px; left: 50%; transform: translateX(-50%); z-index: 25; font-size: 12px; opacity: 0.95; }
+    #gameOverText { font-size: 22px; color: #fff; text-shadow: 0 2px 6px rgba(0,0,0,0.6); }
   </style>
 </head>
 <body>
   <div id="gameWrapper">
-    <div id="gameArea">
+    <div id="gameArea" aria-label="Game area">
       <div id="hud">
         <div class="score">Score: <span id="scoreVal">0</span></div>
         <div class="speed">Car Speed: <span id="speedVal">0</span></div>
       </div>
 
-      <img id="car" src="car.png" alt="car">
+      <!-- Inline SVG Blue Car (no external file needed) -->
+      <svg id="car" width="50" height="70" viewBox="0 0 50 70" aria-hidden="true">
+        <!-- body -->
+        <rect x="6" y="18" rx="6" ry="6" width="38" height="34" fill="#2b7cff"></rect>
+        <!-- roof -->
+        <rect x="14" y="8" rx="4" ry="4" width="22" height="18" fill="#1f6de8"></rect>
+        <!-- windows -->
+        <rect x="16" y="11" width="8" height="6" fill="rgba(255,255,255,0.8)"></rect>
+        <rect x="26" y="11" width="8" height="6" fill="rgba(255,255,255,0.8)"></rect>
+        <!-- wheels -->
+        <circle cx="14" cy="56" r="6" fill="#111"></circle>
+        <circle cx="36" cy="56" r="6" fill="#111"></circle>
+      </svg>
 
-      <div id="help">Use ← → arrows to move • Speed increases over time</div>
+      <div id="help">← → to move • Hold or touch top quarter for boost • Touch/drag left-right on mobile</div>
 
       <div id="overlay">
         <h1>🚗 Car Racing</h1>
@@ -128,48 +141,113 @@
   const car = document.getElementById('car');
   const gameArea = document.getElementById('gameArea');
 
-  // Game state
+  // Game constants & state
   let gameStarted = false;
   let lastTime = null;
-  let score = 0;            // seconds survived * factor
-  let baseSpeed = 8;       // initial movement speed (px per frame when holding)
-  let speedMultiplier = 1; // increases over time
-  let maxMultiplier = 3;   // cap of speed increase
-  let multiplierIncreaseRate = 0.02; // how fast multiplier increases per second
+  let score = 0;
+  let baseSpeed = 8;            // base horizontal movement speed
+  let boostAmount = 12;         // extra speed while Up Arrow or top touch held
+  let speedMultiplier = 1;      // passive multiplier that grows over time
+  let maxMultiplier = 3;        // cap
+  let multiplierIncreaseRate = 0.02;
   let carX = 175;
-  const minX = 10;
-  const maxX = 400 - 50 - 10; // game width - car width - margin
+  const carW = 50;
+  const carH = 70;
+
+  // will be set on init to reflect CSS / responsive changes
+  function getGameBounds(){
+    return {
+      width: gameArea.clientWidth,
+      height: gameArea.clientHeight,
+      minX: 10,
+      maxX: gameArea.clientWidth - carW - 10
+    };
+  }
+  let bounds = getGameBounds();
 
   let leftPressed = false;
   let rightPressed = false;
+  let upPressed = false; // for boost
 
-  // Update displayed values
+  // Obstacles
+  let obstacles = [];
+  const obstacleSpawnInterval = 1200; // ms
+  const obstacleMinW = 50, obstacleMaxW = 90;
+  let lastSpawn = 0;
+
+  // Game over state
+  let gameOver = false;
+
+  // Update HUD
   function updateHUD(){
     scoreEl.textContent = Math.floor(score);
-    // show effective "movement speed" as integer (for player clarity)
-    const effectiveSpeed = Math.round(baseSpeed * speedMultiplier);
+    const effectiveSpeed = Math.round((baseSpeed + (upPressed ? boostAmount : 0)) * speedMultiplier);
     speedEl.textContent = effectiveSpeed;
   }
 
   // Keyboard handlers
   document.addEventListener('keydown', (e) => {
-    if (!gameStarted) return;
     if (e.key === 'ArrowLeft') leftPressed = true;
     if (e.key === 'ArrowRight') rightPressed = true;
+    if (e.key === 'ArrowUp') upPressed = true;
+    if (!gameStarted && (e.key === 'Enter')) startGame();
   });
   document.addEventListener('keyup', (e) => {
-    if (!gameStarted) return;
     if (e.key === 'ArrowLeft') leftPressed = false;
     if (e.key === 'ArrowRight') rightPressed = false;
+    if (e.key === 'ArrowUp') upPressed = false;
   });
 
-  // For mobile: simple touch zones (left/right halves)
-  gameArea.addEventListener('touchstart', function(e){
-    if (!gameStarted) return;
-    const x = e.touches[0].clientX - gameArea.getBoundingClientRect().left;
-    if (x < (gameArea.clientWidth/2)) leftPressed = true; else rightPressed = true;
-  }, {passive:true});
-  gameArea.addEventListener('touchend', function(){ leftPressed=false; rightPressed=false; });
+  // Pointer (works for touch and mouse) handlers for mobile
+  let activePointerId = null;
+  gameArea.addEventListener('pointerdown', ptrDown);
+  gameArea.addEventListener('pointermove', ptrMove);
+  window.addEventListener('pointerup', ptrUp);
+  window.addEventListener('pointercancel', ptrUp);
+
+  function ptrDown(ev){
+    // only handle primary pointer
+    if (activePointerId !== null && ev.pointerId !== activePointerId) return;
+    activePointerId = ev.pointerId;
+    handlePointer(ev);
+    // prevent default to avoid scrolling
+    ev.preventDefault();
+  }
+
+  function ptrMove(ev){
+    if (activePointerId !== ev.pointerId) return;
+    handlePointer(ev);
+    ev.preventDefault();
+  }
+
+  function ptrUp(ev){
+    if (activePointerId !== ev.pointerId) return;
+    leftPressed = rightPressed = upPressed = false;
+    activePointerId = null;
+  }
+
+  function handlePointer(ev){
+    if (!gameStarted || gameOver) return;
+    const rect = gameArea.getBoundingClientRect();
+    const x = ev.clientX - rect.left;
+    const y = ev.clientY - rect.top;
+    // top quarter = boost
+    if (y < rect.height * 0.25){
+      upPressed = true;
+      leftPressed = rightPressed = false;
+      return;
+    } else upPressed = false;
+
+    // left or right half for movement; additionally allow dragging to steer
+    if (x < rect.width / 2) {
+      leftPressed = true; rightPressed = false;
+    } else {
+      leftPressed = false; rightPressed = true;
+    }
+  }
+
+  // Touchend fallback for old browsers
+  gameArea.addEventListener('touchend', ()=>{ leftPressed = rightPressed = upPressed = false; }, {passive:true});
 
   // Start & Restart
   startBtn.addEventListener('click', startGame);
@@ -179,7 +257,14 @@
     overlay.style.display = 'none';
     restartBtn.style.display = 'inline-block';
     gameStarted = true;
+    gameOver = false;
     lastTime = null;
+    lastSpawn = performance.now();
+    // clear existing obstacles (if any)
+    obstacles.forEach(o => o.el.remove());
+    obstacles = [];
+    bounds = getGameBounds();
+    car.style.left = carX + 'px';
     requestAnimationFrame(gameLoop);
   }
 
@@ -191,46 +276,129 @@
     score = 0;
     baseSpeed = 8;
     speedMultiplier = 1;
-    updateHUD();
-    carX = 175;
+    carX = (getGameBounds().width - carW)/2;
     car.style.left = carX + 'px';
-    leftPressed = rightPressed = false;
+    leftPressed = rightPressed = upPressed = false;
+    gameOver = false;
+    updateHUD();
   }
 
-  // Main loop
+  // Spawn obstacle
+  function spawnObstacle(){
+    const w = obstacleMinW + Math.random() * (obstacleMaxW - obstacleMinW);
+    const x = Math.random() * (bounds.width - w - 20) + 10;
+    const el = document.createElement('div');
+    el.className = 'obstacle';
+    el.style.width = Math.round(w) + 'px';
+    el.style.left = Math.round(x) + 'px';
+    el.style.top = '-60px';
+    // random speed (px per second)
+    const speed = 120 + Math.random() * 160;
+    gameArea.appendChild(el);
+    obstacles.push({el, x, y: -60, w, h: 40, speed});
+  }
+
+  // Collision test
+  function rectIntersect(a, b){
+    return !(b.x > a.x + a.w || b.x + b.w < a.x || b.y > a.y + a.h || b.y + b.h < a.y);
+  }
+
+  // Main game loop
   function gameLoop(timestamp){
     if (!lastTime) lastTime = timestamp;
     const dt = (timestamp - lastTime) / 1000; // seconds
     lastTime = timestamp;
 
-    // Update score (increase by time survived)
-    if (gameStarted){
-      score += dt * 10; // 10 points per second (adjustable)
-      // increase difficulty (speed multiplier)
+    if (gameStarted && !gameOver){
+      // Score & difficulty grow
+      score += dt * 10;
       speedMultiplier += multiplierIncreaseRate * dt;
       if (speedMultiplier > maxMultiplier) speedMultiplier = maxMultiplier;
 
-      // Movement
-      const movement = baseSpeed * speedMultiplier * (dt * 60); 
-      // (dt*60) normalizes to ~per-frame feel across fps
+      // update bounds in case of orientation change/responsive
+      bounds = getGameBounds();
+
+      // Movement (normalize feel across fps)
+      const movement = (baseSpeed + (upPressed ? boostAmount : 0)) * speedMultiplier * (dt * 60);
       if (leftPressed) carX -= movement;
       if (rightPressed) carX += movement;
-      carX = Math.max(minX, Math.min(maxX, carX));
+      carX = Math.max(bounds.minX, Math.min(bounds.maxX, carX));
       car.style.left = Math.round(carX) + 'px';
+
+      // Spawn obstacles
+      if (timestamp - lastSpawn > obstacleSpawnInterval){
+        spawnObstacle();
+        lastSpawn = timestamp;
+      }
+
+      // Move obstacles and check collisions
+      const carTop = bounds.height - 20 - carH; // car's y-coordinate (top)
+      for (let i = obstacles.length - 1; i >= 0; i--){
+        const o = obstacles[i];
+        o.y += o.speed * dt;
+        if (o.el) o.el.style.top = Math.round(o.y) + 'px';
+
+        const carRect = { x: carX, y: carTop, w: carW, h: carH };
+        const obsRect = { x: parseFloat(o.el.style.left), y: o.y, w: o.w, h: o.h };
+
+        if (rectIntersect(carRect, obsRect)){
+          gameOver = true;
+          showGameOver();
+        }
+
+        // remove off-screen obstacles
+        if (o.y > bounds.height + 80){
+          o.el.remove();
+          obstacles.splice(i,1);
+        }
+      }
 
       updateHUD();
     }
 
-    // continue loop
-    if (gameStarted) requestAnimationFrame(gameLoop);
+    if (!gameOver && gameStarted) requestAnimationFrame(gameLoop);
   }
 
-  // initialize HUD
+  function showGameOver(){
+    // show overlay with Game Over text and score, provide restart without full reload
+    overlay.innerHTML = `<div style="text-align:center">
+      <div id="gameOverText">💥 GAME OVER 💥</div>
+      <div style="margin-top:8px">Score: <strong>${Math.floor(score)}</strong></div>
+      <button id="startBtn2" class="btn" style="margin-top:10px">Restart</button>
+    </div>`;
+    overlay.style.display = 'flex';
+    // wire the restart button
+    document.getElementById('startBtn2').addEventListener('click', () => {
+      // restore original overlay content and reset
+      overlay.innerHTML = `<h1>🚗 Car Racing</h1>
+        <div>Survive as long as possible. Score increases over time.</div>
+        <button id="startBtn" class="btn">Start Race</button>`;
+      // rebind
+      document.getElementById('startBtn').addEventListener('click', startGame);
+      // reset state
+      score = 0;
+      baseSpeed = 8;
+      speedMultiplier = 1;
+      carX = (getGameBounds().width - carW)/2;
+      car.style.left = carX + 'px';
+      leftPressed = rightPressed = upPressed = false;
+      gameOver = false;
+      gameStarted = false;
+      updateHUD();
+    });
+  }
+
+  // initialize HUD & center car for first load
+  carX = (getGameBounds().width - carW)/2;
+  car.style.left = carX + 'px';
   updateHUD();
 
-  // small UX: pressing Enter will start if overlay visible
-  document.addEventListener('keydown', (e)=>{
-    if (!gameStarted && (e.key === 'Enter')) startGame();
+  // handle window resize/orientation so touch zones remain correct
+  window.addEventListener('resize', () => {
+    bounds = getGameBounds();
+    // keep car in bounds
+    carX = Math.max(bounds.minX, Math.min(bounds.maxX, carX));
+    car.style.left = carX + 'px';
   });
 </script>
 </body>
